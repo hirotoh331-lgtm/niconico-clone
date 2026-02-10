@@ -1,0 +1,33 @@
+body { font-family: sans-serif; margin: 0; background: #f0f0f0; }
+header { background: #333; color: #fff; padding: 10px 20px; display: flex; justify-content: space-between; align-items: center; }
+.hidden { display: none !important; }
+main { padding: 20px; max-width: 960px; margin: 0 auto; }
+
+/* 動画一覧 */
+.grid-container { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 15px; }
+.video-card { background: #fff; padding: 10px; cursor: pointer; border-radius: 4px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+.video-card:hover { transform: translateY(-2px); transition: 0.2s; }
+
+/* プレイヤー周り */
+.player-container { width: 100%; background: #000; position: relative; margin-bottom: 10px; }
+#video-wrapper { position: relative; width: 100%; padding-top: 56.25%; /* 16:9 Aspect Ratio */ }
+#main-video { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 1; }
+
+#comment-layer { 
+    position: absolute; top: 0; left: 0; width: 100%; height: 100%; 
+    z-index: 2; pointer-events: none; overflow: hidden; 
+}
+
+/* コメントスタイル */
+.comment-item { 
+    position: absolute; white-space: nowrap; font-weight: bold; 
+    text-shadow: 1px 1px 0 #000, -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000;
+    line-height: 1.2;
+}
+.size-big { font-size: 32px; }
+.size-medium { font-size: 24px; }
+.size-small { font-size: 16px; }
+
+/* コントロール */
+.comment-controls { display: flex; gap: 10px; margin-bottom: 20px; flex-wrap: wrap; }
+#comment-text { flex-grow: 1; padding: 8px; }

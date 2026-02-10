@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+
+<html lang="ja">
+
+<head>
+
+    <meta charset="UTF-8">
+
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>NicoClone Prototype</title>
+
+    <link rel="stylesheet" href="style.css">
+
+</head>
+
+<body>
+
+    <header>
+
+        <h1>NicoClone Prototype</h1>
+
+        <button id="go-home-btn">動画一覧に戻る</button>
+
+    </header>
+
+
+
+    <main>
+
+        <section id="list-view">
+
+            <div class="upload-area">
+
+                <h3>動画アップロード</h3>
+
+                <input type="file" id="video-input" accept="video/*">
+
+                <button id="upload-btn">アップロード</button>
+
+            </div>
+
+            <hr>
+
+            <h3>動画一覧</h3>
+
+            <div id="video-list" class="grid-container"></div>
+
+        </section>
+
+
+
+        <section id="player-view" class="hidden">
+
+            <div class="player-container">
+
+                <div id="video-wrapper">
+
+                    <video id="main-video" controls></video>
+
+                    <div id="comment-layer"></div>
+
+                </div>
+
+            </div>
+
+            
+
+            <div class="comment-controls">
+
+                <input type="text" id="comment-text" placeholder="コメントを入力...">
+
+                <div class="options">
+
+                    <input type="color" id="comment-color" value="#ffffff">
+
+                    <select id="comment-size">
+
+                        <option value="medium">中</option>
+
+                        <option value="big">大</option>
+
+                        <option value="small">小</option>
+
+                    </select>
+
+                    <select id="comment-position">
+
+                        <option value="naka">流れる</option>
+
+                        <option value="ue">上固定</option>
+
+                        <option value="shita">下固定</option>
+
+                    </select>
+
+                    <button id="send-comment-btn">コメントする</button>
+
+                </div>
+
+            </div>
+
+            
+
+            <div id="comment-list-display">
+
+                </div>
+
+        </section>
+
+    </main>
+
+
+
+    <script src="script.js"></script>
+
+</body>
+
+</html>
