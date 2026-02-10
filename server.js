@@ -1,56 +1,61 @@
-require('dotenv').config(); // .envファイルを読み込む
+// 必要なツールを読み込む
+require('dotenv').config(); // Renderで必須の修正
 const express = require('express');
 const multer = require('multer');
 const cloudinary = require('cloudinary').v2;
-const fs = require('fs'); // ファイル操作用
-const path = require('path');
+const fs = require('fs');
 const cors = require('cors');
 
 const app = express();
-app.use(express.json());
-app.use(express.static('public')); // publicフォルダを公開
-app.use(cors());
+const port = process.env.PORT || 3000; // Renderのポート設定に対応
 
-// 1. Cloudinaryの設定
+// Cloudinaryの設定
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
   api_key: process.env.CLOUDINARY_API_KEY,
   api_secret: process.env.CLOUDINARY_API_SECRET
 });
 
-// 2. 動画の一時保存先設定（uploadsフォルダ）
+// 一時保存の設定
 const upload = multer({ dest: 'uploads/' });
 
-// 簡易データベース（本番ではちゃんとしたDB推奨ですが、今は配列で代用）
+// データ保存用（サーバー再起動で消えます）
 let videos = [];
+
+app.use(express.json());
+app.use(express.static('public'));
+app.use(cors());
 
 // -------------------------------------------------
 // 機能A: 動画アップロード
 // -------------------------------------------------
 app.post('/upload', upload.single('video'), async (req, res) => {
   try {
-    const filePath = req.file.path; // 一時保存されたファイルの場所
+    if (!req.file) {
+      return res.status(400).json({ success: false, error: 'ファイルがありません' });
+    }
 
-    // Cloudinaryへアップロード
-    // resource_type: 'video' が重要！
-    const result = await cloudinary.uploader.upload(filePath, {
+    console.log('Cloudinaryへアップロード中...');
+
+    // Cloudinaryへアップロード（フォルダ指定を追加！）
+    const result = await cloudinary.uploader.upload(req.file.path, {
       resource_type: 'video',
-      folder: 'niconico-clone' // Cloudinary内のフォルダ名
+      folder: 'niconico-clone' // ★ここが修正ポイント：フォルダを指定
     });
 
-    // 成功したら、サーバー内の一時ファイルを削除（容量節約）
-    fs.unlinkSync(filePath);
+    // 成功したら一時ファイルを削除
+    fs.unlinkSync(req.file.path);
 
-    // データベース（配列）に保存する情報
+    // データを保存
     const newVideo = {
-      id: Date.now().toString(),       // ID
-      title: req.body.title || '無題', // 動画タイトル
-      public_id: result.public_id,     // Cloudinary上のID (削除に必要)
-      url: result.secure_url,          // 動画のURL
-      comments: []                     // コメント用（空っぽで作成）
+      id: Date.now().toString(),
+      title: req.body.title || '無題の動画',
+      public_id: result.public_id, // 削除するときに必要
+      url: result.secure_url,
+      thumbnail: result.secure_url.replace('.mp4', '.jpg') // サムネイルURL
     };
 
-    videos.push(newVideo); // 配列に追加
+    videos.push(newVideo);
 
     console.log('アップロード成功:', newVideo.title);
     res.json({ success: true, video: newVideo });
@@ -69,7 +74,7 @@ app.get('/videos', (req, res) => {
 });
 
 // -------------------------------------------------
-// 機能C: 動画の削除
+// 機能C: 動画の削除（これを残しました！）
 // -------------------------------------------------
 app.delete('/videos/:id', async (req, res) => {
   const videoId = req.params.id;
@@ -83,10 +88,9 @@ app.delete('/videos/:id', async (req, res) => {
 
   try {
     // Cloudinaryから削除
-    // 動画を消すときは resource_type: 'video' が必須！
     await cloudinary.uploader.destroy(video.public_id, { resource_type: 'video' });
 
-    // 配列（データベース）からも削除
+    // リストから削除
     videos.splice(videoIndex, 1);
 
     console.log('削除成功:', video.title);
@@ -99,7 +103,6 @@ app.delete('/videos/:id', async (req, res) => {
 });
 
 // サーバー起動
-const PORT = 3000;
-app.listen(PORT, () => {
-  console.log(`サーバーが起動しました: http://localhost:${PORT}`);
+app.listen(port, () => {
+  console.log(`サーバーが起動しました！ポート: ${port}`);
 });
