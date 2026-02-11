@@ -7,25 +7,45 @@ const goHomeBtn = document.getElementById('go-home-btn');
 const statusText = document.getElementById('status');
 
 let currentVideoId = null;
+let currentComments = []; // 現在の動画の全コメントデータ
+let lastPlayedTime = 0;   // 直前にチェックした時間
 let socket = null;
 
-// ★改良点：Socket.ioが正しく読み込まれているかチェックする
 if (typeof io !== 'undefined') {
     socket = io();
-    
-    // サーバーからコメントが来たら画面に流す
     socket.on('new-comment', (data) => {
         if (data.videoId === currentVideoId) {
-            spawnComment(data.text);
+            // 新着コメントをリストに追加
+            currentComments.push({ text: data.text, vpos: data.vpos });
+            // もし今の再生時間と近ければ、即座に流す
+            if (Math.abs(videoEl.currentTime - data.vpos) < 1) {
+                spawnComment(data.text);
+            }
         }
     });
-} else {
-    // 読み込まれていなかったらアラートを出す（これで原因がわかります）
-    alert("【注意】Socket.ioが読み込まれていません！\nindex.html に <script src=\"/socket.io/socket.io.js\"></script> を追加してください。");
 }
 
-// 初期読み込み
 document.addEventListener('DOMContentLoaded', fetchVideos);
+
+// --- 動画の時間を監視してコメントを流す（最重要機能） ---
+videoEl.ontimeupdate = () => {
+    const currentTime = videoEl.currentTime;
+
+    // もし時間が戻ったり大きく飛んだりしたら（シークした場合）、チェック時間をリセット
+    if (currentTime < lastPlayedTime || currentTime - lastPlayedTime > 2) {
+        commentLayer.innerHTML = ''; // 画面のコメントを全部消す
+        lastPlayedTime = currentTime;
+    }
+
+    // 「直前の時間」から「今の時間」の間に設定されているコメントを探す
+    currentComments.forEach(comment => {
+        if (comment.vpos >= lastPlayedTime && comment.vpos < currentTime) {
+            spawnComment(comment.text);
+        }
+    });
+
+    lastPlayedTime = currentTime;
+};
 
 // 動画一覧取得
 async function fetchVideos() {
@@ -37,47 +57,45 @@ async function fetchVideos() {
         videos.forEach(v => {
             const div = document.createElement('div');
             div.className = 'video-card';
-            // シングルクォート対策のためにエスケープ処理を入れると安全ですが、一旦簡易的にそのままにします
-            div.innerHTML = `
-                <span onclick="openPlayer('${v.id}', '${v.title}', '${v.url}')">▶ ${v.title}</span>
-                <button class="delete-btn" onclick="deleteVideo('${v.id}')">削除</button>
-            `;
+            // 安全のためデータを渡す際は一旦変数に入れる
+            div.innerHTML = `<span>▶ ${v.title}</span>`;
+            div.onclick = () => openPlayer(v); // 引数でオブジェクトごと渡す
+            
+            // 削除ボタン
+            const delBtn = document.createElement('button');
+            delBtn.innerText = '削除';
+            delBtn.className = 'delete-btn';
+            delBtn.onclick = (e) => {
+                e.stopPropagation(); // 親要素のクリックイベントを止める
+                deleteVideo(v.id);
+            };
+            div.appendChild(delBtn);
+
             videoList.appendChild(div);
         });
     } catch (e) {
-        console.error("動画リストの取得に失敗しました", e);
+        console.error(e);
     }
 }
 
 // プレイヤーを開く
-async function openPlayer(id, title, url) {
-    currentVideoId = id;
+function openPlayer(video) {
+    currentVideoId = video.id;
+    // コメントデータを保存（vposがない古いデータのために0を入れておく）
+    currentComments = video.comments.map(c => 
+        typeof c === 'string' ? { text: c, vpos: 0 } : c
+    );
+
     listView.classList.add('hidden');
     playerView.classList.remove('hidden');
-    document.getElementById('current-video-title').innerText = title;
-    videoEl.src = url;
+    document.getElementById('current-video-title').innerText = video.title;
     
-    // コメントレイヤーをリセット
+    videoEl.src = video.url;
+    videoEl.currentTime = 0;
+    lastPlayedTime = 0;
     commentLayer.innerHTML = '';
-
-    // サーバーから最新情報を取得して過去ログを流す
-    try {
-        const res = await fetch('/videos');
-        const videos = await res.json();
-        const currentVideo = videos.find(v => v.id === id);
-        
-        if (currentVideo && currentVideo.comments) {
-            currentVideo.comments.forEach(text => {
-                setTimeout(() => {
-                    spawnComment(text);
-                }, Math.random() * 2000); 
-            });
-        }
-    } catch (e) {
-        console.error("コメント取得エラー", e);
-    }
-
-    videoEl.play();
+    
+    videoEl.play().catch(e => console.log("自動再生ブロック:", e));
 }
 
 // 戻る
@@ -85,7 +103,8 @@ goHomeBtn.onclick = () => {
     videoEl.pause();
     playerView.classList.add('hidden');
     listView.classList.remove('hidden');
-    currentVideoId = null; 
+    currentVideoId = null;
+    videoEl.src = ""; // 停止
     fetchVideos();
 };
 
@@ -104,29 +123,30 @@ document.getElementById('upload-btn').onclick = async () => {
         const res = await fetch('/upload', { method: 'POST', body: formData });
         if (res.ok) {
             statusText.innerText = "完了！";
-            document.getElementById('title-input').value = ''; // タイトル欄をクリア
-            document.getElementById('video-input').value = ''; // ファイル選択をクリア
+            document.getElementById('title-input').value = '';
+            document.getElementById('video-input').value = '';
             fetchVideos();
         } else {
             statusText.innerText = "失敗しました";
         }
     } catch (e) {
-        statusText.innerText = "エラー発生";
-        console.error(e);
+        statusText.innerText = "エラー";
     }
 };
 
-// コメント送信
+// コメント送信（時間情報 vpos を追加）
 async function sendComment() {
     const inputEl = document.getElementById('comment-text');
     const text = inputEl.value;
     if (!text || !currentVideoId) return;
 
-    // サーバーに保存（サーバー側で io.emit されるので、ここでは何もしない）
+    // 現在の再生時間を取得
+    const vpos = videoEl.currentTime;
+
     await fetch(`/videos/${currentVideoId}/comments`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: text })
+        body: JSON.stringify({ text: text, vpos: vpos })
     });
 
     inputEl.value = '';
@@ -135,20 +155,19 @@ async function sendComment() {
 document.getElementById('send-comment-btn').onclick = sendComment;
 document.getElementById('comment-text').onkeypress = (e) => { if(e.key === 'Enter') sendComment(); };
 
-// 動画から削除
+// 削除
 async function deleteVideo(id) {
     if (!confirm("本当に削除しますか？")) return;
     await fetch(`/videos/${id}`, { method: 'DELETE' });
     fetchVideos();
 }
 
-// コメントを右から左へ流す
+// コメント流し（見た目は変更なし）
 function spawnComment(text) {
     const el = document.createElement('div');
     el.innerText = text;
     el.className = 'comment-item';
     
-    // ランダムな高さに配置
     const top = Math.random() * (commentLayer.clientHeight - 40);
     el.style.top = `${top}px`;
     el.style.left = `${commentLayer.clientWidth}px`;
@@ -157,9 +176,9 @@ function spawnComment(text) {
 
     let pos = commentLayer.clientWidth;
     function move() {
-        pos -= 3; // スピード
+        if (!document.body.contains(el)) return; // 要素が消えてたら終了
+        pos -= 4; // 少し速くしました
         el.style.left = `${pos}px`;
-        // 要素が画面外に出るまで動かす
         if (pos > -el.clientWidth) {
             requestAnimationFrame(move);
         } else {

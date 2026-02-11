@@ -1,152 +1,189 @@
-require('dotenv').config();
-const express = require('express');
-const mongoose = require('mongoose');
-const http = require('http');
-const { Server } = require('socket.io');
-const cors = require('cors');
-const multer = require('multer');
-const cloudinary = require('cloudinary').v2; // Cloudinary読み込み
-const fs = require('fs');
+const listView = document.getElementById('list-view');
+const playerView = document.getElementById('player-view');
+const videoList = document.getElementById('video-list');
+const videoEl = document.getElementById('main-video');
+const commentLayer = document.getElementById('comment-layer');
+const goHomeBtn = document.getElementById('go-home-btn');
+const statusText = document.getElementById('status');
 
-const app = express();
-const server = http.createServer(app);
-const io = new Server(server); // Socket.io設定
+let currentVideoId = null;
+let currentComments = []; // 現在の動画の全コメントデータ
+let lastPlayedTime = 0;   // 直前にチェックした時間
+let socket = null;
 
-// --- Cloudinary設定 ---
-// RenderのEnvironment Variablesに設定されている必要があります
-cloudinary.config({
-  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-  api_key: process.env.CLOUDINARY_API_KEY,
-  api_secret: process.env.CLOUDINARY_API_SECRET
-});
-
-// --- MongoDB接続（成功した設定を使用） ---
-const MONGODB_URI = process.env.MONGODB_URI;
-mongoose.connect(MONGODB_URI)
-    .then(() => console.log("✅ MongoDB接続成功！(Cloudinary版)"))
-    .catch(err => console.error("❌ MongoDB接続エラー:", err));
-
-// --- データモデル ---
-const videoSchema = new mongoose.Schema({
-    title: String,
-    public_id: String, // Cloudinary上のID（削除用）
-    url: String,       // 動画のURL
-    comments: [String],
-    createdAt: { type: Date, default: Date.now }
-});
-const Video = mongoose.model('Video', videoSchema);
-
-// --- ミドルウェア ---
-app.use(cors());
-app.use(express.json());
-app.use(express.static('public'));
-
-// 一時保存用フォルダの作成（Render用）
-if (!fs.existsSync('uploads')) {
-    fs.mkdirSync('uploads');
-}
-// Multer設定（一時的にサーバーに保存→Cloudinaryへ）
-const upload = multer({ dest: 'uploads/' });
-
-// --- APIルート ---
-
-// 1. 動画一覧取得
-app.get('/videos', async (req, res) => {
-    try {
-        const videos = await Video.find().sort({ createdAt: -1 });
-        // フロントエンド用にデータを整形
-        const formattedVideos = videos.map(v => ({
-            id: v._id,
-            title: v.title,
-            url: v.url, // CloudinaryのURLをそのまま返す
-            comments: v.comments
-        }));
-        res.json(formattedVideos);
-    } catch (e) {
-        res.status(500).json({ error: e.message });
-    }
-});
-
-// 2. 動画アップロード（Cloudinaryへ保存）
-app.post('/upload', upload.single('video'), async (req, res) => {
-    try {
-        if (!req.file) return res.status(400).send('ファイルがありません');
-        
-        console.log("Cloudinaryへアップロード中...", req.body.title);
-
-        // Cloudinaryにアップロード
-        const result = await cloudinary.uploader.upload(req.file.path, {
-            resource_type: 'video',
-            folder: 'niconico-clone' // Cloudinary内のフォルダ名
-        });
-
-        // サーバー内の一時ファイルを削除（これをしないとゴミが溜まる）
-        fs.unlinkSync(req.file.path);
-
-        // データベースに情報を保存
-        const newVideo = new Video({
-            title: req.body.title || "無題",
-            public_id: result.public_id,
-            url: result.secure_url,
-            comments: []
-        });
-        await newVideo.save();
-        
-        console.log("保存完了！:", newVideo.title);
-        res.status(201).json(newVideo);
-
-    } catch (e) {
-        console.error("アップロードエラー:", e);
-        res.status(500).send(e.message);
-    }
-});
-
-// 3. 動画削除
-app.delete('/videos/:id', async (req, res) => {
-    try {
-        const video = await Video.findById(req.params.id);
-        if (video) {
-            // Cloudinaryから実体ファイルを削除
-            if (video.public_id) {
-                await cloudinary.uploader.destroy(video.public_id, { resource_type: 'video' });
+if (typeof io !== 'undefined') {
+    socket = io();
+    socket.on('new-comment', (data) => {
+        if (data.videoId === currentVideoId) {
+            // 新着コメントをリストに追加
+            currentComments.push({ text: data.text, vpos: data.vpos });
+            // もし今の再生時間と近ければ、即座に流す
+            if (Math.abs(videoEl.currentTime - data.vpos) < 1) {
+                spawnComment(data.text);
             }
-            // データベースから削除
-            await Video.findByIdAndDelete(req.params.id);
         }
-        res.sendStatus(200);
+    });
+}
+
+document.addEventListener('DOMContentLoaded', fetchVideos);
+
+// --- 動画の時間を監視してコメントを流す（最重要機能） ---
+videoEl.ontimeupdate = () => {
+    const currentTime = videoEl.currentTime;
+
+    // もし時間が戻ったり大きく飛んだりしたら（シークした場合）、チェック時間をリセット
+    if (currentTime < lastPlayedTime || currentTime - lastPlayedTime > 2) {
+        commentLayer.innerHTML = ''; // 画面のコメントを全部消す
+        lastPlayedTime = currentTime;
+    }
+
+    // 「直前の時間」から「今の時間」の間に設定されているコメントを探す
+    currentComments.forEach(comment => {
+        if (comment.vpos >= lastPlayedTime && comment.vpos < currentTime) {
+            spawnComment(comment.text);
+        }
+    });
+
+    lastPlayedTime = currentTime;
+};
+
+// 動画一覧取得
+async function fetchVideos() {
+    try {
+        const res = await fetch('/videos');
+        if (!res.ok) throw new Error("取得失敗");
+        const videos = await res.json();
+        videoList.innerHTML = '';
+        videos.forEach(v => {
+            const div = document.createElement('div');
+            div.className = 'video-card';
+            // 安全のためデータを渡す際は一旦変数に入れる
+            div.innerHTML = `<span>▶ ${v.title}</span>`;
+            div.onclick = () => openPlayer(v); // 引数でオブジェクトごと渡す
+            
+            // 削除ボタン
+            const delBtn = document.createElement('button');
+            delBtn.innerText = '削除';
+            delBtn.className = 'delete-btn';
+            delBtn.onclick = (e) => {
+                e.stopPropagation(); // 親要素のクリックイベントを止める
+                deleteVideo(v.id);
+            };
+            div.appendChild(delBtn);
+
+            videoList.appendChild(div);
+        });
     } catch (e) {
         console.error(e);
-        res.status(500).send(e.message);
     }
-});
+}
 
-// 4. コメント投稿
-app.post('/videos/:id/comments', async (req, res) => {
+// プレイヤーを開く
+function openPlayer(video) {
+    currentVideoId = video.id;
+    // コメントデータを保存（vposがない古いデータのために0を入れておく）
+    currentComments = video.comments.map(c => 
+        typeof c === 'string' ? { text: c, vpos: 0 } : c
+    );
+
+    listView.classList.add('hidden');
+    playerView.classList.remove('hidden');
+    document.getElementById('current-video-title').innerText = video.title;
+    
+    videoEl.src = video.url;
+    videoEl.currentTime = 0;
+    lastPlayedTime = 0;
+    commentLayer.innerHTML = '';
+    
+    videoEl.play().catch(e => console.log("自動再生ブロック:", e));
+}
+
+// 戻る
+goHomeBtn.onclick = () => {
+    videoEl.pause();
+    playerView.classList.add('hidden');
+    listView.classList.remove('hidden');
+    currentVideoId = null;
+    videoEl.src = ""; // 停止
+    fetchVideos();
+};
+
+// アップロード
+document.getElementById('upload-btn').onclick = async () => {
+    const file = document.getElementById('video-input').files[0];
+    const title = document.getElementById('title-input').value;
+    if (!file) return alert('ファイルを選択してください');
+
+    statusText.innerText = "アップロード中...";
+    const formData = new FormData();
+    formData.append('video', file);
+    formData.append('title', title || "無題");
+
     try {
-        const { text } = req.body;
-        const video = await Video.findById(req.params.id);
-        if (video) {
-            video.comments.push(text);
-            await video.save();
-            
-            // Socket.ioで全員に配信
-            io.emit('new-comment', { videoId: video._id, text: text });
-            res.sendStatus(200);
+        const res = await fetch('/upload', { method: 'POST', body: formData });
+        if (res.ok) {
+            statusText.innerText = "完了！";
+            document.getElementById('title-input').value = '';
+            document.getElementById('video-input').value = '';
+            fetchVideos();
         } else {
-            res.sendStatus(404);
+            statusText.innerText = "失敗しました";
         }
     } catch (e) {
-        res.status(500).send(e.message);
+        statusText.innerText = "エラー";
     }
-});
+};
 
-// Socket.io接続
-io.on('connection', (socket) => {
-    console.log('ユーザーが接続しました');
-});
+// コメント送信（時間情報 vpos を追加）
+async function sendComment() {
+    const inputEl = document.getElementById('comment-text');
+    const text = inputEl.value;
+    if (!text || !currentVideoId) return;
 
-// サーバー起動
-const PORT = process.env.PORT || 10000;
-server.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
-});
+    // 現在の再生時間を取得
+    const vpos = videoEl.currentTime;
+
+    await fetch(`/videos/${currentVideoId}/comments`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: text, vpos: vpos })
+    });
+
+    inputEl.value = '';
+}
+
+document.getElementById('send-comment-btn').onclick = sendComment;
+document.getElementById('comment-text').onkeypress = (e) => { if(e.key === 'Enter') sendComment(); };
+
+// 削除
+async function deleteVideo(id) {
+    if (!confirm("本当に削除しますか？")) return;
+    await fetch(`/videos/${id}`, { method: 'DELETE' });
+    fetchVideos();
+}
+
+// コメント流し（見た目は変更なし）
+function spawnComment(text) {
+    const el = document.createElement('div');
+    el.innerText = text;
+    el.className = 'comment-item';
+    
+    const top = Math.random() * (commentLayer.clientHeight - 40);
+    el.style.top = `${top}px`;
+    el.style.left = `${commentLayer.clientWidth}px`;
+    
+    commentLayer.appendChild(el);
+
+    let pos = commentLayer.clientWidth;
+    function move() {
+        if (!document.body.contains(el)) return; // 要素が消えてたら終了
+        pos -= 4; // 少し速くしました
+        el.style.left = `${pos}px`;
+        if (pos > -el.clientWidth) {
+            requestAnimationFrame(move);
+        } else {
+            el.remove();
+        }
+    }
+    move();
+}
