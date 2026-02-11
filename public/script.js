@@ -1,3 +1,6 @@
+// Socket.ioの初期化（サーバーと接続）
+const socket = io();
+
 const listView = document.getElementById('list-view');
 const playerView = document.getElementById('player-view');
 const videoList = document.getElementById('video-list');
@@ -7,6 +10,14 @@ const goHomeBtn = document.getElementById('go-home-btn');
 const statusText = document.getElementById('status');
 
 let currentVideoId = null;
+
+// ★【新機能】サーバーからリアルタイムでコメントを受け取った時の処理
+socket.on('new-comment', (data) => {
+    // 今見ている動画に対するコメントであれば画面に流す
+    if (data.videoId === currentVideoId) {
+        spawnComment(data.text);
+    }
+});
 
 // 初期読み込み
 document.addEventListener('DOMContentLoaded', fetchVideos);
@@ -27,13 +38,31 @@ async function fetchVideos() {
     });
 }
 
-// プレイヤーを開く
-function openPlayer(id, title, url) {
+// プレイヤーを開く（過去のコメントを流す処理を追加）
+async function openPlayer(id, title, url) {
     currentVideoId = id;
     listView.classList.add('hidden');
     playerView.classList.remove('hidden');
     document.getElementById('current-video-title').innerText = title;
     videoEl.src = url;
+    
+    // コメントレイヤーをリセット
+    commentLayer.innerHTML = '';
+
+    // ★【修正】サーバーから最新の動画情報を取得して、過去のコメントを流す
+    const res = await fetch('/videos');
+    const videos = await res.json();
+    const currentVideo = videos.find(v => v.id === id);
+    
+    if (currentVideo && currentVideo.comments) {
+        currentVideo.comments.forEach(text => {
+            // 過去ログは少しタイミングをずらして流すと自然に見えます
+            setTimeout(() => {
+                spawnComment(text);
+            }, Math.random() * 2000); 
+        });
+    }
+
     videoEl.play();
 }
 
@@ -42,6 +71,7 @@ goHomeBtn.onclick = () => {
     videoEl.pause();
     playerView.classList.add('hidden');
     listView.classList.remove('hidden');
+    currentVideoId = null; // IDをリセット
     fetchVideos();
 };
 
@@ -71,8 +101,8 @@ async function sendComment() {
     const text = inputEl.value;
     if (!text || !currentVideoId) return;
 
-    // 画面に流す（先行反映）
-    spawnComment(text);
+    // ※ここでは spawnComment(text) は呼びません。
+    // サーバーから socket.on('new-comment') 経由で全員（自分含む）に届くからです。
 
     // サーバーに保存
     await fetch(`/videos/${currentVideoId}/comments`, {
