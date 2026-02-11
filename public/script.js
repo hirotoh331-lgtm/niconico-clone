@@ -1,6 +1,3 @@
-// Socket.ioの初期化（サーバーと接続）
-const socket = io();
-
 const listView = document.getElementById('list-view');
 const playerView = document.getElementById('player-view');
 const videoList = document.getElementById('video-list');
@@ -10,35 +7,49 @@ const goHomeBtn = document.getElementById('go-home-btn');
 const statusText = document.getElementById('status');
 
 let currentVideoId = null;
+let socket = null;
 
-// ★【新機能】サーバーからリアルタイムでコメントを受け取った時の処理
-socket.on('new-comment', (data) => {
-    // 今見ている動画に対するコメントであれば画面に流す
-    if (data.videoId === currentVideoId) {
-        spawnComment(data.text);
-    }
-});
+// ★改良点：Socket.ioが正しく読み込まれているかチェックする
+if (typeof io !== 'undefined') {
+    socket = io();
+    
+    // サーバーからコメントが来たら画面に流す
+    socket.on('new-comment', (data) => {
+        if (data.videoId === currentVideoId) {
+            spawnComment(data.text);
+        }
+    });
+} else {
+    // 読み込まれていなかったらアラートを出す（これで原因がわかります）
+    alert("【注意】Socket.ioが読み込まれていません！\nindex.html に <script src=\"/socket.io/socket.io.js\"></script> を追加してください。");
+}
 
 // 初期読み込み
 document.addEventListener('DOMContentLoaded', fetchVideos);
 
 // 動画一覧取得
 async function fetchVideos() {
-    const res = await fetch('/videos');
-    const videos = await res.json();
-    videoList.innerHTML = '';
-    videos.forEach(v => {
-        const div = document.createElement('div');
-        div.className = 'video-card';
-        div.innerHTML = `
-            <span onclick="openPlayer('${v.id}', '${v.title}', '${v.url}')">▶ ${v.title}</span>
-            <button class="delete-btn" onclick="deleteVideo('${v.id}')">削除</button>
-        `;
-        videoList.appendChild(div);
-    });
+    try {
+        const res = await fetch('/videos');
+        if (!res.ok) throw new Error("取得失敗");
+        const videos = await res.json();
+        videoList.innerHTML = '';
+        videos.forEach(v => {
+            const div = document.createElement('div');
+            div.className = 'video-card';
+            // シングルクォート対策のためにエスケープ処理を入れると安全ですが、一旦簡易的にそのままにします
+            div.innerHTML = `
+                <span onclick="openPlayer('${v.id}', '${v.title}', '${v.url}')">▶ ${v.title}</span>
+                <button class="delete-btn" onclick="deleteVideo('${v.id}')">削除</button>
+            `;
+            videoList.appendChild(div);
+        });
+    } catch (e) {
+        console.error("動画リストの取得に失敗しました", e);
+    }
 }
 
-// プレイヤーを開く（過去のコメントを流す処理を追加）
+// プレイヤーを開く
 async function openPlayer(id, title, url) {
     currentVideoId = id;
     listView.classList.add('hidden');
@@ -49,18 +60,21 @@ async function openPlayer(id, title, url) {
     // コメントレイヤーをリセット
     commentLayer.innerHTML = '';
 
-    // ★【修正】サーバーから最新の動画情報を取得して、過去のコメントを流す
-    const res = await fetch('/videos');
-    const videos = await res.json();
-    const currentVideo = videos.find(v => v.id === id);
-    
-    if (currentVideo && currentVideo.comments) {
-        currentVideo.comments.forEach(text => {
-            // 過去ログは少しタイミングをずらして流すと自然に見えます
-            setTimeout(() => {
-                spawnComment(text);
-            }, Math.random() * 2000); 
-        });
+    // サーバーから最新情報を取得して過去ログを流す
+    try {
+        const res = await fetch('/videos');
+        const videos = await res.json();
+        const currentVideo = videos.find(v => v.id === id);
+        
+        if (currentVideo && currentVideo.comments) {
+            currentVideo.comments.forEach(text => {
+                setTimeout(() => {
+                    spawnComment(text);
+                }, Math.random() * 2000); 
+            });
+        }
+    } catch (e) {
+        console.error("コメント取得エラー", e);
     }
 
     videoEl.play();
@@ -71,7 +85,7 @@ goHomeBtn.onclick = () => {
     videoEl.pause();
     playerView.classList.add('hidden');
     listView.classList.remove('hidden');
-    currentVideoId = null; // IDをリセット
+    currentVideoId = null; 
     fetchVideos();
 };
 
@@ -86,12 +100,19 @@ document.getElementById('upload-btn').onclick = async () => {
     formData.append('video', file);
     formData.append('title', title || "無題");
 
-    const res = await fetch('/upload', { method: 'POST', body: formData });
-    if (res.ok) {
-        statusText.innerText = "完了！";
-        fetchVideos();
-    } else {
-        statusText.innerText = "失敗しました";
+    try {
+        const res = await fetch('/upload', { method: 'POST', body: formData });
+        if (res.ok) {
+            statusText.innerText = "完了！";
+            document.getElementById('title-input').value = ''; // タイトル欄をクリア
+            document.getElementById('video-input').value = ''; // ファイル選択をクリア
+            fetchVideos();
+        } else {
+            statusText.innerText = "失敗しました";
+        }
+    } catch (e) {
+        statusText.innerText = "エラー発生";
+        console.error(e);
     }
 };
 
@@ -101,10 +122,7 @@ async function sendComment() {
     const text = inputEl.value;
     if (!text || !currentVideoId) return;
 
-    // ※ここでは spawnComment(text) は呼びません。
-    // サーバーから socket.on('new-comment') 経由で全員（自分含む）に届くからです。
-
-    // サーバーに保存
+    // サーバーに保存（サーバー側で io.emit されるので、ここでは何もしない）
     await fetch(`/videos/${currentVideoId}/comments`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -141,6 +159,7 @@ function spawnComment(text) {
     function move() {
         pos -= 3; // スピード
         el.style.left = `${pos}px`;
+        // 要素が画面外に出るまで動かす
         if (pos > -el.clientWidth) {
             requestAnimationFrame(move);
         } else {
