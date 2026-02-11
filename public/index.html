@@ -2,108 +2,143 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>ニコニコクローン（Cloudinary版）</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ニコニコクローン</title>
     <style>
         body { font-family: sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
-        .video-card { border: 1px solid #ddd; padding: 10px; margin-bottom: 20px; border-radius: 8px; }
-        video { width: 100%; max-width: 400px; }
-        button { cursor: pointer; padding: 5px 10px; }
-        .delete-btn { background-color: #ff4444; color: white; border: none; }
+        .video-card { border: 1px solid #ccc; padding: 15px; margin-bottom: 20px; border-radius: 8px; background: #fff; }
+        video { width: 100%; max-height: 400px; background: #000; }
+        
+        /* コメント欄のデザイン */
+        .comment-section { margin-top: 15px; border-top: 1px dashed #ccc; padding-top: 10px; }
+        .comment-list { background: #f9f9f9; padding: 10px; height: 100px; overflow-y: scroll; font-size: 14px; margin-bottom: 5px; border-radius: 4px; }
+        .input-area { display: flex; gap: 5px; }
+        input { flex: 1; padding: 5px; }
+        
+        /* ボタンのデザイン */
+        button { cursor: pointer; padding: 5px 15px; }
+        .delete-btn { background-color: #ff4444; color: white; border: none; border-radius: 4px; margin-top: 10px; }
+        .delete-btn:hover { background-color: #cc0000; }
     </style>
 </head>
 <body>
 
-    <h1>動画投稿サイト</h1>
+    <h1>ニコニコクローン</h1>
 
-    <div style="background: #f0f0f0; padding: 15px; border-radius: 8px;">
-        <h3>動画をアップロード</h3>
-        <input type="text" id="titleInput" placeholder="動画のタイトル" required><br><br>
-        <input type="file" id="fileInput" accept="video/mp4"><br><br>
-        <button onclick="uploadVideo()">アップロードする</button>
+    <div style="margin-bottom: 30px; padding: 20px; background: #eee; border-radius: 8px;">
+        <h3>動画を投稿する</h3>
+        <input type="text" id="titleInput" placeholder="動画のタイトル">
+        <input type="file" id="fileInput" accept="video/*">
+        <button onclick="uploadVideo()">アップロード</button>
         <p id="status"></p>
     </div>
 
-    <hr>
-
-    <div id="videoList"></div>
+    <div id="videoContainer"></div>
 
     <script>
-        // ページ読み込み時に一覧を取得
-        window.onload = loadVideos;
+        const API_URL = ''; // 自動判定
 
-        // 1. 動画をアップロードする関数
-        async function uploadVideo() {
-            const title = document.getElementById('titleInput').value;
-            const file = document.getElementById('fileInput').files[0];
-            const status = document.getElementById('status');
+        // 1. 動画リストを取得して表示
+        async function loadVideos() {
+            const res = await fetch(API_URL + '/videos');
+            const videos = await res.json();
+            const container = document.getElementById('videoContainer');
+            container.innerHTML = ''; // リセット
 
-            if (!file) {
-                alert("ファイルを選択してください！");
+            if (videos.length === 0) {
+                container.innerHTML = '<p>動画はまだありません</p>';
                 return;
             }
 
-            status.textContent = "アップロード中...（時間がかかります）";
+            videos.forEach(video => {
+                // コメントリストを作成
+                let commentsHTML = video.comments.map(c => `<div>・${c}</div>`).join('');
 
+                const html = `
+                    <div class="video-card">
+                        <h3>${video.title}</h3>
+                        <video src="${video.url}" controls></video>
+                        
+                        <div class="comment-section">
+                            <h4>コメント</h4>
+                            <div class="comment-list" id="comments-${video.id}">
+                                ${commentsHTML || '<div style="color:#888;">まだコメントはありません</div>'}
+                            </div>
+                            <div class="input-area">
+                                <input type="text" id="input-${video.id}" placeholder="コメントを入力...">
+                                <button onclick="postComment('${video.id}')">送信</button>
+                            </div>
+                        </div>
+
+                        <div style="text-align: right;">
+                            <button class="delete-btn" onclick="deleteVideo('${video.id}')">この動画を削除</button>
+                        </div>
+                    </div>
+                `;
+                container.innerHTML += html;
+            });
+        }
+
+        // 2. アップロード機能
+        async function uploadVideo() {
+            const file = document.getElementById('fileInput').files[0];
+            const title = document.getElementById('titleInput').value;
+            if (!file) return alert('ファイルを選んでください');
+
+            document.getElementById('status').innerText = 'アップロード中...時間がかかります';
+            
             const formData = new FormData();
             formData.append('video', file);
             formData.append('title', title);
 
             try {
-                const res = await fetch('/upload', {
-                    method: 'POST',
-                    body: formData
-                });
-                const data = await res.json();
-
-                if (data.success) {
-                    status.textContent = "完了しました！";
-                    loadVideos(); // 一覧を更新
+                const res = await fetch(API_URL + '/upload', { method: 'POST', body: formData });
+                if (res.ok) {
+                    document.getElementById('status').innerText = '完了！';
+                    document.getElementById('titleInput').value = ''; // 入力欄をクリア
+                    document.getElementById('fileInput').value = '';
+                    loadVideos(); 
                 } else {
-                    status.textContent = "失敗: " + data.error;
+                    document.getElementById('status').innerText = '失敗しました';
                 }
-            } catch (err) {
-                console.error(err);
-                status.textContent = "エラーが発生しました";
+            } catch (e) {
+                console.error(e);
+                document.getElementById('status').innerText = 'エラーが発生しました';
             }
         }
 
-        // 2. 動画一覧を取得して表示する関数
-        async function loadVideos() {
-            const res = await fetch('/videos');
-            const videos = await res.json();
-            const list = document.getElementById('videoList');
-            list.innerHTML = ""; // 一旦クリア
+        // 3. コメント送信機能
+        async function postComment(videoId) {
+            const input = document.getElementById(`input-${videoId}`);
+            const text = input.value;
+            if (!text) return;
 
-            videos.forEach(video => {
-                const div = document.createElement('div');
-                div.className = 'video-card';
-                div.innerHTML = `
-                    <h3>${video.title}</h3>
-                    <video src="${video.url}" controls></video>
-                    <p>ID: ${video.id}</p>
-                    <button class="delete-btn" onclick="deleteVideo('${video.id}')">削除する</button>
-                `;
-                list.appendChild(div);
+            const res = await fetch(API_URL + `/videos/${videoId}/comments`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ text: text })
             });
-        }
 
-        // 3. 動画を削除する関数
-        async function deleteVideo(id) {
-            if (!confirm("本当に削除しますか？（Cloudinaryからも消えます）")) return;
-
-            try {
-                const res = await fetch(`/videos/${id}`, { method: 'DELETE' });
-                const data = await res.json();
-                if (data.success) {
-                    alert("削除しました");
-                    loadVideos(); // 一覧を更新
-                } else {
-                    alert("削除失敗");
-                }
-            } catch (err) {
-                console.error(err);
+            if (res.ok) {
+                input.value = ''; 
+                loadVideos(); // 更新してコメントを表示
             }
         }
+
+        // 4. 動画削除機能（復活！）
+        async function deleteVideo(id) {
+            if (!confirm("本当に削除しますか？")) return;
+
+            const res = await fetch(API_URL + `/videos/${id}`, { method: 'DELETE' });
+            if (res.ok) {
+                loadVideos(); // リストを更新
+            } else {
+                alert("削除に失敗しました");
+            }
+        }
+
+        // 最初の読み込み
+        loadVideos();
     </script>
 </body>
 </html>

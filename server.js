@@ -1,5 +1,4 @@
-// 必要なツールを読み込む
-require('dotenv').config(); // Renderで必須の修正
+require('dotenv').config();
 const express = require('express');
 const multer = require('multer');
 const cloudinary = require('cloudinary').v2;
@@ -7,81 +6,89 @@ const fs = require('fs');
 const cors = require('cors');
 
 const app = express();
-const port = process.env.PORT || 3000; // Renderのポート設定に対応
+const port = process.env.PORT || 3000;
 
-// Cloudinaryの設定
+// Cloudinary設定
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
   api_key: process.env.CLOUDINARY_API_KEY,
   api_secret: process.env.CLOUDINARY_API_SECRET
 });
 
-// ★★★ ここが今回の重要な修正ポイント！ ★★★
-// Renderには「uploads」フォルダがないので、なければ自動で作る！
+// uploadsフォルダ自動作成（Render対策）
 if (!fs.existsSync('uploads')) {
   fs.mkdirSync('uploads');
 }
-// ★★★★★★★★★★★★★★★★★★★★★★★★★
 
-// 一時保存の設定
 const upload = multer({ dest: 'uploads/' });
-
-// データ保存用（サーバー再起動で消えます）
-let videos = [];
+let videos = []; // データ保存用
 
 app.use(express.json());
 app.use(express.static('public'));
 app.use(cors());
 
 // -------------------------------------------------
-// 機能A: 動画アップロード
+// 機能A: 動画アップロード（コメント箱を追加！）
 // -------------------------------------------------
 app.post('/upload', upload.single('video'), async (req, res) => {
   try {
-    if (!req.file) {
-      return res.status(400).json({ success: false, error: 'ファイルがありません' });
-    }
+    if (!req.file) return res.status(400).json({ success: false, error: 'ファイルなし' });
 
     console.log('Cloudinaryへアップロード中...');
-
-    // Cloudinaryへアップロード（フォルダ指定を追加！）
+    
     const result = await cloudinary.uploader.upload(req.file.path, {
       resource_type: 'video',
-      folder: 'niconico-clone' // Cloudinary内のフォルダ名
+      folder: 'niconico-clone'
     });
 
-    // 成功したら一時ファイルを削除
     fs.unlinkSync(req.file.path);
 
-    // データを保存
     const newVideo = {
       id: Date.now().toString(),
-      title: req.body.title || '無題の動画',
-      public_id: result.public_id, // 削除するときに必要
+      title: req.body.title || '無題',
+      public_id: result.public_id,
       url: result.secure_url,
-      thumbnail: result.secure_url.replace('.mp4', '.jpg') // サムネイルURL
+      thumbnail: result.secure_url.replace('.mp4', '.jpg'),
+      comments: [] // ★重要：ここでコメントを入れる場所を作る
     };
 
     videos.push(newVideo);
-
-    console.log('アップロード成功:', newVideo.title);
+    console.log('投稿成功:', newVideo.title);
     res.json({ success: true, video: newVideo });
 
   } catch (error) {
-    console.error('アップロード失敗:', error);
-    res.status(500).json({ success: false, error: 'アップロードに失敗しました' });
+    console.error(error);
+    res.status(500).json({ success: false, error: '失敗しました' });
   }
 });
 
 // -------------------------------------------------
-// 機能B: 動画一覧の取得
+// 機能B: 動画一覧取得
 // -------------------------------------------------
 app.get('/videos', (req, res) => {
   res.json(videos);
 });
 
 // -------------------------------------------------
-// 機能C: 動画の削除
+// 機能C: コメント投稿（★新機能！）
+// -------------------------------------------------
+app.post('/videos/:id/comments', (req, res) => {
+  const videoId = req.params.id;
+  const text = req.body.text;
+
+  const video = videos.find(v => v.id === videoId);
+
+  if (video && text) {
+    video.comments.push(text); // コメントを追加
+    console.log(`コメント受信 [${video.title}]: ${text}`);
+    res.json({ success: true, comments: video.comments });
+  } else {
+    res.status(400).json({ success: false });
+  }
+});
+
+// -------------------------------------------------
+// 機能D: 動画の削除（★消さないように維持！）
 // -------------------------------------------------
 app.delete('/videos/:id', async (req, res) => {
   const videoId = req.params.id;
@@ -94,22 +101,16 @@ app.delete('/videos/:id', async (req, res) => {
   const video = videos[videoIndex];
 
   try {
-    // Cloudinaryから削除
     await cloudinary.uploader.destroy(video.public_id, { resource_type: 'video' });
-
-    // リストから削除
     videos.splice(videoIndex, 1);
-
     console.log('削除成功:', video.title);
     res.json({ success: true });
-
   } catch (error) {
     console.error('削除失敗:', error);
-    res.status(500).json({ success: false, error: '削除に失敗しました' });
+    res.status(500).json({ success: false });
   }
 });
 
-// サーバー起動
 app.listen(port, () => {
-  console.log(`サーバーが起動しました！ポート: ${port}`);
+  console.log(`Server running on port ${port}`);
 });
