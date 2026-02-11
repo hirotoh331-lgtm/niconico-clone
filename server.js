@@ -16,6 +16,13 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET
 });
 
+// ★★★ ここが今回の重要な修正ポイント！ ★★★
+// Renderには「uploads」フォルダがないので、なければ自動で作る！
+if (!fs.existsSync('uploads')) {
+  fs.mkdirSync('uploads');
+}
+// ★★★★★★★★★★★★★★★★★★★★★★★★★
+
 // 一時保存の設定
 const upload = multer({ dest: 'uploads/' });
 
@@ -40,7 +47,7 @@ app.post('/upload', upload.single('video'), async (req, res) => {
     // Cloudinaryへアップロード（フォルダ指定を追加！）
     const result = await cloudinary.uploader.upload(req.file.path, {
       resource_type: 'video',
-      folder: 'niconico-clone' // ★ここが修正ポイント：フォルダを指定
+      folder: 'niconico-clone' // Cloudinary内のフォルダ名
     });
 
     // 成功したら一時ファイルを削除
@@ -74,7 +81,7 @@ app.get('/videos', (req, res) => {
 });
 
 // -------------------------------------------------
-// 機能C: 動画の削除（これを残しました！）
+// 機能C: 動画の削除
 // -------------------------------------------------
 app.delete('/videos/:id', async (req, res) => {
   const videoId = req.params.id;
