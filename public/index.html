@@ -52,7 +52,9 @@
 
             videos.forEach(video => {
                 // コメントリストを作成
-                let commentsHTML = video.comments.map(c => `<div>・${c}</div>`).join('');
+                // ★ここが大事：まだコメントがない場合は空配列として扱う
+                const comments = video.comments || [];
+                let commentsHTML = comments.map(c => `<div>・${c}</div>`).join('');
 
                 const html = `
                     <div class="video-card">
@@ -125,7 +127,7 @@
             }
         }
 
-        // 4. 動画削除機能（復活！）
+        // 4. 動画削除機能
         async function deleteVideo(id) {
             if (!confirm("本当に削除しますか？")) return;
 
