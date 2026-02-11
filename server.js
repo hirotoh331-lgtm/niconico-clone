@@ -1,144 +1,139 @@
-require('dotenv').config();
+require('dotenv').config(); // ローカル開発用（Renderでは自動無視されます）
 const express = require('express');
-const multer = require('multer');
-const cloudinary = require('cloudinary').v2;
-const fs = require('fs');
-const cors = require('cors');
+const mongoose = require('mongoose');
 const http = require('http');
 const { Server } = require('socket.io');
-const mongoose = require('mongoose'); // ★追加：データベース操作用
+const cors = require('cors');
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, { cors: { origin: "*" } });
-const port = process.env.PORT || 3000;
+const io = new Server(server);
 
-// Cloudinary設定
-cloudinary.config({
-  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-  api_key: process.env.CLOUDINARY_API_KEY,
-  api_secret: process.env.CLOUDINARY_API_SECRET
-});
+// ミドルウェア設定
+app.use(cors());
+app.use(express.json());
+app.use(express.static('public')); // フロントエンド（index.htmlなど）を配信
 
-// MongoDB接続（★ここが新しい！）
-// データベースへの接続を開始します
-mongoose.connect(process.env.MONGODB_URI)
-  .then(() => console.log('✅ MongoDBに接続成功！'))
-  .catch(err => console.error('❌ MongoDB接続エラー:', err));
-
-// データの設計図（スキーマ）を作成
-const videoSchema = new mongoose.Schema({
-  title: String,
-  public_id: String,
-  url: String,
-  thumbnail: String,
-  comments: [String], // コメントは文字のリスト
-  createdAt: { type: Date, default: Date.now } // 投稿日時
-});
-
-// モデル（実体）を作成
-const Video = mongoose.model('Video', videoSchema);
-
-if (!fs.existsSync('uploads')) {
-  fs.mkdirSync('uploads');
+// アップロード先フォルダの確認と作成
+const uploadDir = path.join(__dirname, 'public/uploads');
+if (!fs.existsSync(uploadDir)) {
+    fs.mkdirSync(uploadDir, { recursive: true });
 }
 
-const upload = multer({ dest: 'uploads/' });
-
-app.use(express.json());
-app.use(express.static('public'));
-app.use(cors());
-
-// --- Socket.io 接続 ---
-io.on('connection', (socket) => {
-  console.log('ユーザーが接続しました');
+// Multer設定（動画保存用）
+const storage = multer.diskStorage({
+    destination: (req, file, cb) => cb(null, 'public/uploads/'),
+    filename: (req, file, cb) => cb(null, Date.now() + '-' + file.originalname)
 });
+const upload = multer({ storage });
 
-// --- 機能A: 動画アップロード ---
-app.post('/upload', upload.single('video'), async (req, res) => {
-  try {
-    if (!req.file) return res.status(400).json({ success: false, error: 'ファイルなし' });
+// ★ここが一番重要！MongoDB接続設定（詳細ログ付き）★
+const MONGODB_URI = process.env.MONGODB_URI;
 
-    const result = await cloudinary.uploader.upload(req.file.path, {
-      resource_type: 'video',
-      folder: 'niconico-clone'
+if (!MONGODB_URI) {
+    console.error("❌ 【致命的エラー】MONGODB_URI が設定されていません！RenderのEnvironmentを確認してください。");
+} else {
+    console.log("ℹ️ MongoDBに接続を試みます..."); // パスワードは表示しないので安全
+}
+
+mongoose.connect(MONGODB_URI)
+    .then(() => {
+        console.log("✅ MongoDB接続成功！(Connected)");
+    })
+    .catch((err) => {
+        console.error("❌ MongoDB接続失敗...");
+        console.error(err); // エラーの全容を表示
     });
 
-    fs.unlinkSync(req.file.path);
-
-    // ★データベースに保存
-    const newVideo = new Video({
-      title: req.body.title || '無題',
-      public_id: result.public_id,
-      url: result.secure_url,
-      thumbnail: result.secure_url.replace('.mp4', '.jpg'),
-      comments: []
-    });
-
-    await newVideo.save(); // 保存実行！
-
-    console.log('投稿成功:', newVideo.title);
-    res.json({ success: true, video: newVideo });
-
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ success: false });
-  }
+// 動画スキーマ
+const videoSchema = new mongoose.Schema({
+    title: String,
+    url: String,
+    comments: [String],
+    createdAt: { type: Date, default: Date.now }
 });
+const Video = mongoose.model('Video', videoSchema);
 
-// --- 機能B: 動画一覧取得 ---
+// --- APIルート ---
+
+// 全動画取得
 app.get('/videos', async (req, res) => {
-  // ★データベースから全件取得（新しい順）
-  const videos = await Video.find().sort({ createdAt: -1 });
-  // id という名前で使えるように変換して返す
-  const formattedVideos = videos.map(v => ({
-    id: v._id, // MongoDBのIDは _id なので変換
-    title: v.title,
-    url: v.url,
-    comments: v.comments
-  }));
-  res.json(formattedVideos);
+    try {
+        const videos = await Video.find().sort({ createdAt: -1 });
+        res.json(videos.map(v => ({
+            id: v._id,
+            title: v.title,
+            url: `/uploads/${path.basename(v.url)}`, // URLを整形
+            comments: v.comments
+        })));
+    } catch (e) {
+        console.error("動画リスト取得エラー:", e);
+        res.status(500).json({ error: e.message });
+    }
 });
 
-// --- 機能C: コメント投稿 ---
-app.post('/videos/:id/comments', async (req, res) => {
-  const { text } = req.body;
-  
-  try {
-    // ★データベースの動画を探してコメント追加
-    const video = await Video.findById(req.params.id);
-    if (!video) return res.status(404).json({ success: false });
+// 動画アップロード
+app.post('/upload', upload.single('video'), async (req, res) => {
+    try {
+        if (!req.file) return res.status(400).send('ファイルがありません');
+        
+        console.log("動画アップロード開始:", req.body.title);
 
-    video.comments.push(text);
-    await video.save(); // 保存！
-
-    // 全員に通知
-    io.emit('new-comment', { videoId: req.params.id, text: text });
-    
-    res.json({ success: true, comments: video.comments });
-  } catch (err) {
-    res.status(500).json({ success: false });
-  }
+        const newVideo = new Video({
+            title: req.body.title || "無題",
+            url: req.file.filename, // ファイル名だけ保存
+            comments: []
+        });
+        await newVideo.save();
+        
+        console.log("動画保存完了！ ID:", newVideo._id);
+        res.status(201).json(newVideo);
+    } catch (e) {
+        console.error("アップロードエラー:", e);
+        res.status(500).send(e.message);
+    }
 });
 
-// --- 機能D: 動画の削除 ---
+// 動画削除
 app.delete('/videos/:id', async (req, res) => {
-  try {
-    const video = await Video.findById(req.params.id);
-    if (!video) return res.status(404).json({ success: false });
-
-    // Cloudinaryから削除
-    await cloudinary.uploader.destroy(video.public_id, { resource_type: 'video' });
-    
-    // ★データベースから削除
-    await Video.findByIdAndDelete(req.params.id);
-
-    res.json({ success: true });
-  } catch (error) {
-    res.status(500).json({ success: false });
-  }
+    try {
+        await Video.findByIdAndDelete(req.params.id);
+        res.sendStatus(200);
+    } catch (e) {
+        res.status(500).send(e.message);
+    }
 });
 
-server.listen(port, () => {
-  console.log(`Server running on port ${port}`);
+// コメント投稿
+app.post('/videos/:id/comments', async (req, res) => {
+    try {
+        const { text } = req.body;
+        const video = await Video.findById(req.params.id);
+        if (video) {
+            video.comments.push(text);
+            await video.save();
+            
+            // Socket.ioで全員に配信
+            io.emit('new-comment', { videoId: video._id, text: text });
+            res.sendStatus(200);
+        } else {
+            res.sendStatus(404);
+        }
+    } catch (e) {
+        res.status(500).send(e.message);
+    }
+});
+
+// Socket.io接続
+io.on('connection', (socket) => {
+    console.log('ユーザーが接続しました');
+});
+
+// サーバー起動
+const PORT = process.env.PORT || 10000;
+server.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
 });
